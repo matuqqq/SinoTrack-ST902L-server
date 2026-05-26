@@ -51,7 +51,6 @@ function parseDmsToDecimal(coordStr, direction) {
   if (direction === 'S' || direction === 'W') decimal *= -1;
   return parseFloat(decimal.toFixed(6));
 }
-
 function parseGpsDate(dateStr, timeStr) {
   const day   = parseInt(dateStr.substring(0, 2));
   const month = parseInt(dateStr.substring(2, 4)) - 1;
@@ -75,6 +74,10 @@ const tcpServer = net.createServer((socket) => {
 
   socket.on('data', async (data) => {
     const rawString = data.toString('ascii').trim();
+if (data[0] === 0x24) {
+  log('info', `[BIN HEX] ${data.toString('hex')}`);
+  return;
+}
     log('info', `[RAW] ${rawString}`);
     io.emit('rawFrame', { raw: rawString, time: new Date().toISOString() });
 
