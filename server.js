@@ -59,7 +59,69 @@ function parseGpsDate(dateStr, timeStr) {
   const s = parseInt(timeStr.substring(4, 6));
   return new Date(Date.UTC(year, month, day, h, m, s));
 }
+  return Array.from(bytes).map(b =>
+    String((b >> 4) & 0xF) + String(b & 0xF)
+  ).join('');
+}
 
+function parseBinaryFrame(data) {
+  if (data[0] !== 0x24 || data.length < 22) return null;
+
+  const deviceId = bcdToStr(data.slice(1, 6));
+
+  const h = ((data[6] >> 4) & 0xF) * 10 + (data[6] & 0xF);
+  const m = ((data[7] >> 4) & 0xF) * 10 + (data[7] & 0xF);
+  const s = ((data[8] >> 4) & 0xF) * 10 + (data[8] & 0xF);
+  const dd = ((data[9]  >> 4) & 0xF) * 10 + (data[9]  & 0xF);
+  const mo = ((data[10] >> 4) & 0xF) * 10 + (data[10] & 0xF);
+  const yy = 2000 + ((data[11] >> 4) & 0xF) * 10 + (data[11] & 0xF);
+  const timestamp = new Date(Date.UTC(yy, mo - 1, dd, h, m, s));
+
+  const flags    = data[16];
+  const validGps = (flags & 0x04) !== 0;
+  const isSouth  = (flags & 0x02) !== 0;
+  const isWest   = (flags & 0x01) === 0;
+
+  const latStr = bcdToStr(data.slice(12, 16));
+  const latDeg = parseInt(latStr.substring(0, 2));
+  const latMin = parseFloat(latStr.substring(2, 4) + '.' + latStr.substring(4));
+  let latitude = parseFloat((latDeg + latMin / 60).toFixed(6));
+  if (isSouth) latitude = -latitude;
+
+  const lonStr = bcdToStr(data.slice(17, 21));
+  const lonDeg = parseInt(lonStr.substring(0, 3));
+  const lonMin = parseFloat(lonStr.substring(3, 5) + '.' + lonStr.substring(5));
+  let longitude = parseFloat((lonDeg + lonMin / 60).toFixed(6));
+  if (isWest) longitude = -longitude;
+
+  const speedKmH = parseFloat(((data[22] << 8 | data[23])).toFixed(2));
+  const statusHex = data.slice(25, 29).toString('hex').toUpperCase();
+
+  return { deviceId, timestamp, validGps, latitude, longitude, speedKmH, course: 0, statusHex };
+}
+
+Luego en socket.on('data', async (data) => {, al principio del handler, antes del const rawString = ..., agregá:
+
+  // Binary $p frame
+  if (data[0] === 0x24) {
+    const parsed = parseBinaryFrame(data);
+    if (!parsed || !parsed.validGps) return;
+    const { deviceId, timestamp, validGps, latitude, longitude, speedKmH, course, statusHex } = parsed;
+    const vehicleExists = await prisma.vehicle.findUnique({ where: { id: deviceId } });
+    if (!vehicleExists) { log('warn', `[BIN] RECHAZADO ${deviceId} no registrado`); return; }
+    await prisma.locationReport.create({
+      data: { vehicleId: deviceId, timestamp, validGps, latitude, longitude, speed: speedKmH, course, statusHex }
+    });
+    log('success', `[BIN] Guardado ${deviceId} | Lat:${latitude} Lon:${longitude} | ${speedKmH}km/h`);
+    io.emit('locationUpdate', {
+      vehicleId: deviceId,
+      vehicleName: vehicleExists.name || deviceId,
+      vehicleColor: vehicleExists.color || '#3B82F6',
+      latitude, longitude, speed: speedKmH, course, validGps,
+      timestamp: timestamp.toISOString()
+    });
+    return;
+  }
 // ==========================================
 // 🔌 TCP SERVER (listens to GPS tracker)
 // ==========================================
@@ -72,7 +134,26 @@ const tcpServer = net.createServer((socket) => {
   log('info', `Rastreador conectado: ${remoteAddr}`);
 
   socket.on('data', async (data) => {
-    const rawString = data.toString('ascii').trim();
+      if (data[0] === 0x24) {
+    const parsed = parseBinaryFrame(data);
+    if (!parsed || !parsed.validGps) return;
+    const { deviceId, timestamp, validGps, latitude, longitude, speedKmH, course, statusHex } = parsed;
+    const vehicleExists = await prisma.vehicle.findUnique({ where: { id: deviceId } });
+    if (!vehicleExists) { log('warn', `[BIN] RECHAZADO ${deviceId} no registrado`); return; }
+    await prisma.locationReport.create({
+      data: { vehicleId: deviceId, timestamp, validGps, latitude, longitude, speed: speedKmH, course, statusHex }
+    });
+    log('success', `[BIN] Guardado ${deviceId} | Lat:${latitude} Lon:${longitude} | ${speedKmH}km/h`);
+    io.emit('locationUpdate', {
+      vehicleId: deviceId,
+      vehicleName: vehicleExists.name || deviceId,
+      vehicleColor: vehicleExists.color || '#3B82F6',
+      latitude, longitude, speed: speedKmH, course, validGps,
+      timestamp: timestamp.toISOString()
+    });
+    return;
+  }
+const rawString = data.toString('ascii').trim();
 if (data[0] === 0x24) {
   log('info', `[BIN HEX] ${data.toString('hex')}`);
   return;
