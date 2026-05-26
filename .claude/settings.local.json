@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(New-Item *)",
+      "PowerShell(cd \"C:\\\\Users\\\\Matu\\\\Documents\\\\GitHub\\\\SinoTrack-ST902L server\"; $env:DATABASE_URL = \"postgresql://sinotrack:sinotrack_pass@localhost:5432/sinotrack?schema=public\"; npx prisma migrate dev --name init)",
+      "PowerShell(docker exec sinotrack-db *)",
+      "PowerShell(Test-NetConnection *)",
+      "PowerShell(docker run --rm -v \"${PWD}/package.json:/app/package.json\" -v \"${PWD}/package-lock.json:/app/package-lock.json\" -w /app node:22-alpine sh -c \"npm install --no-audit --no-fund 2>&1 | tail -20\" 2>&1)",
+      "PowerShell(docker run *)",
+      "PowerShell(docker run --rm -v \"${PWD}/package.json:/app/package.json\" -w /app node:22-alpine sh -c \"npm install --no-audit --no-fund --no-package-lock 2>&1 | tail -10\" 2>&1)",
+      "PowerShell(docker run --rm -v \"${PWD}/package.json:/app/package.json\" -w /app node:22-alpine sh -c \"npm install --no-audit --no-fund --no-package-lock 2>&1 | tail -10\")",
+      "Bash(docker run *)",
+      "PowerShell($pkgJson = [System.IO.Path]::GetFullPath\\(\"C:\\\\Users\\\\Matu\\\\Documents\\\\GitHub\\\\SinoTrack-ST902L server\\\\package.json\"\\); docker run --rm -v \"${pkgJson}:/app/package.json\" -w /app node:22-alpine sh -c \"npm install --no-audit --no-fund --no-package-lock 2>&1 | tail -15\")",
+      "PowerShell(ls *)",
+      "PowerShell(docker compose logs *)"
+    ]
+  }
+}

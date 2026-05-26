@@ -1,0 +1,35 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+model Vehicle {
+  id        String           @id
+  name      String?
+  plate     String?
+  color     String?          @default("#3B82F6")
+  createdAt DateTime         @default(now())
+  reports   LocationReport[]
+}
+
+model LocationReport {
+  id        Int      @id @default(autoincrement())
+  vehicleId String
+  vehicle   Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  timestamp DateTime
+  validGps  Boolean
+  latitude  Float
+  longitude Float
+  speed     Float
+  course    Float
+  statusHex String
+  createdAt DateTime @default(now())
+
+  @@index([vehicleId])
+  @@index([timestamp])
+}

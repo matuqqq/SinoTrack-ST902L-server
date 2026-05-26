@@ -1,0 +1,40 @@
+services:
+
+  # ── PostgreSQL ────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: sinotrack-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     sinotrack
+      POSTGRES_PASSWORD: sinotrack_pass
+      POSTGRES_DB:       sinotrack
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"          # expuesto solo si querés conectar con DBeaver/pgAdmin
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sinotrack -d sinotrack"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── App (TCP + HTTP + Dashboard) ─────────────────────────
+  app:
+    build: .
+    container_name: sinotrack-app
+    restart: unless-stopped
+    ports:
+      - "5013:5013"          # Tracker GPS → TCP
+      - "3000:3000"          # Dashboard → http://localhost:3000
+    environment:
+      DATABASE_URL: postgresql://sinotrack:sinotrack_pass@db:5432/sinotrack?schema=public
+      TCP_PORT:     5013
+      HTTP_PORT:    3000
+    depends_on:
+      db:
+        condition: service_healthy   # espera que Postgres esté listo
+
+volumes:
+  pgdata:
+    driver: local

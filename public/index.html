@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SinoTrack ST902L — Panel de Control</title>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Leaflet Rotated Marker -->
+  <script src="https://unpkg.com/leaflet-rotatedmarker@0.2.0/leaflet.rotatedMarker.js" defer></script>
+
+  <style>
+    /* ── RESET & TOKENS ──────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --surface2: #242736;
+      --border:   #2e3148;
+      --accent:   #4f6ef7;
+      --accent2:  #7c3aed;
+      --green:    #22c55e;
+      --yellow:   #f59e0b;
+      --red:      #ef4444;
+      --text:     #e2e8f0;
+      --muted:    #64748b;
+      --radius:   10px;
+      --font:     'Inter', system-ui, sans-serif;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── TOPBAR ──────────────────────────────────────── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    header .brand { display: flex; align-items: center; gap: 12px; }
+    header .brand svg { width: 32px; height: 32px; }
+    header .brand h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+    header .brand span { font-size: 11px; color: var(--muted); }
+
+    .status-pills { display: flex; gap: 10px; }
+    .pill {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 12px; border-radius: 20px;
+      font-size: 12px; font-weight: 500;
+      background: var(--surface2); border: 1px solid var(--border);
+    }
+    .pill .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .pill.online .dot { background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse 2s infinite; }
+    .pill.offline .dot { background: var(--red); }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    /* ── LAYOUT ──────────────────────────────────────── */
+    .app-body {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── SIDEBAR NAV ─────────────────────────────────── */
+    nav.sidebar {
+      width: 220px;
+      flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 16px 0;
+      gap: 2px;
+    }
+    nav.sidebar a {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 20px;
+      color: var(--muted); text-decoration: none;
+      border-radius: 0; font-weight: 500;
+      transition: color .15s, background .15s;
+      cursor: pointer;
+    }
+    nav.sidebar a:hover { color: var(--text); background: var(--surface2); }
+    nav.sidebar a.active { color: var(--accent); background: rgba(79,110,247,.1); border-right: 3px solid var(--accent); }
+    nav.sidebar a svg { width: 18px; height: 18px; flex-shrink: 0; }
+    nav.sidebar .section-label {
+      font-size: 10px; font-weight: 600; letter-spacing: .08em;
+      color: var(--muted); padding: 16px 20px 4px; text-transform: uppercase;
+    }
+
+    /* ── CONTENT PANELS ──────────────────────────────── */
+    main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .panel { display: none; flex-direction: column; gap: 20px; }
+    .panel.active { display: flex; }
+
+    /* ── CARDS ───────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+    .card-title {
+      font-size: 13px; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .06em;
+      margin-bottom: 16px;
+      display: flex; align-items: center; gap: 8px;
+    }
+
+    /* ── STAT GRID ───────────────────────────────────── */
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap: 14px; }
+    .stat-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+    }
+    .stat-card .value { font-size: 28px; font-weight: 700; }
+    .stat-card .label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .stat-card.accent-green .value { color: var(--green); }
+    .stat-card.accent-blue  .value { color: var(--accent); }
+    .stat-card.accent-purple .value { color: var(--accent2); }
+
+    /* ── TABLE ───────────────────────────────────────── */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+    td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,.02); }
+
+    /* ── BADGE ───────────────────────────────────────── */
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 12px;
+      font-size: 11px; font-weight: 600;
+    }
+    .badge.green { background: rgba(34,197,94,.15); color: var(--green); }
+    .badge.red   { background: rgba(239,68,68,.15); color: var(--red); }
+    .badge.blue  { background: rgba(79,110,247,.15); color: var(--accent); }
+    .badge.gray  { background: rgba(100,116,139,.15); color: var(--muted); }
+
+    /* ── COLOR SWATCH ────────────────────────────────── */
+    .swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: middle; margin-right: 6px; }
+
+    /* ── FORMS ───────────────────────────────────────── */
+    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 14px; }
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    label { font-size: 12px; font-weight: 500; color: var(--muted); }
+    input, select {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 7px; color: var(--text); padding: 9px 12px;
+      font-size: 13px; outline: none; transition: border .15s;
+    }
+    input:focus, select:focus { border-color: var(--accent); }
+    input[type="color"] { padding: 4px; height: 38px; cursor: pointer; }
+
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      padding: 9px 18px; border-radius: 8px; font-size: 13px; font-weight: 600;
+      border: none; cursor: pointer; transition: opacity .15s, transform .1s;
+    }
+    .btn:hover { opacity: .85; }
+    .btn:active { transform: scale(.97); }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-danger  { background: var(--red); color: #fff; }
+    .btn-ghost   { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+    .btn-sm { padding: 5px 10px; font-size: 12px; }
+
+    /* ── MAP ─────────────────────────────────────────── */
+    #map {
+      height: 520px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      z-index: 0;
+    }
+
+    /* ── LOGS ────────────────────────────────────────── */
+    #log-container {
+      background: #0a0c14;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      height: 420px;
+      overflow-y: auto;
+      padding: 12px;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 12px;
+    }
+    .log-entry { padding: 2px 0; display: flex; gap: 12px; }
+    .log-time  { color: var(--muted); flex-shrink: 0; }
+    .log-info    .log-msg { color: var(--text); }
+    .log-warn    .log-msg { color: var(--yellow); }
+    .log-error   .log-msg { color: var(--red); }
+    .log-success .log-msg { color: var(--green); }
+
+    /* ── RAW FRAMES ──────────────────────────────────── */
+    #frames-container {
+      background: #0a0c14;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      height: 300px;
+      overflow-y: auto;
+      padding: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: #a3e635;
+    }
+    .frame-entry { padding: 1px 0; }
+    .frame-entry .ft { color: var(--muted); margin-right: 10px; }
+
+    /* ── TOAST ───────────────────────────────────────── */
+    #toast {
+      position: fixed; bottom: 24px; right: 24px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px 20px;
+      font-size: 13px; font-weight: 500;
+      box-shadow: 0 8px 32px rgba(0,0,0,.4);
+      transform: translateY(80px); opacity: 0;
+      transition: transform .3s, opacity .3s;
+      z-index: 9999; max-width: 320px;
+    }
+    #toast.show { transform: translateY(0); opacity: 1; }
+    #toast.success { border-left: 4px solid var(--green); }
+    #toast.error   { border-left: 4px solid var(--red); }
+    #toast.warn    { border-left: 4px solid var(--yellow); }
+
+    /* ── MODAL ───────────────────────────────────────── */
+    .modal-bg {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,.7); z-index: 1000;
+      align-items: center; justify-content: center;
+    }
+    .modal-bg.open { display: flex; }
+    .modal {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 28px; width: 480px; max-width: 95vw;
+    }
+    .modal h2 { font-size: 17px; margin-bottom: 20px; }
+    .modal-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+
+    /* ── SCROLLBAR ───────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── ONLINE DEVICE LIST ──────────────────────────── */
+    .device-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px; background: var(--surface2);
+      border-radius: 8px; border: 1px solid var(--border);
+    }
+    .device-item .dev-id { font-weight: 600; }
+    .device-item .dev-meta { font-size: 11px; color: var(--muted); }
+
+    /* ── RESPONSIVE ──────────────────────────────────── */
+    @media (max-width: 700px) {
+      nav.sidebar { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="brand">
+    <svg viewBox="0 0 32 32" fill="none">
+      <rect width="32" height="32" rx="8" fill="#4f6ef7"/>
+      <circle cx="16" cy="13" r="5" stroke="#fff" stroke-width="2"/>
+      <path d="M16 18 C12 22 8 28 16 28 C24 28 20 22 16 18Z" fill="#fff" opacity=".7"/>
+      <circle cx="16" cy="13" r="2" fill="#fff"/>
+    </svg>
+    <div>
+      <h1>SinoTrack ST902L</h1>
+      <span>Panel de Control GPS</span>
+    </div>
+  </div>
+  <div class="status-pills">
+    <div class="pill" id="pill-tcp">
+      <div class="dot"></div>
+      <span id="pill-tcp-text">TCP —</span>
+    </div>
+    <div class="pill">
+      <div class="dot" style="background:var(--accent)"></div>
+      <span id="pill-stats">— vehículos · — reportes</span>
+    </div>
+  </div>
+</header>
+
+<div class="app-body">
+  <!-- SIDEBAR -->
+  <nav class="sidebar">
+    <div class="section-label">Monitor</div>
+    <a class="active" data-panel="dashboard">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      Dashboard
+    </a>
+    <a data-panel="map">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>
+      Mapa en Vivo
+    </a>
+    <a data-panel="history">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 15"/></svg>
+      Historial
+    </a>
+
+    <div class="section-label">Config</div>
+    <a data-panel="vehicles">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+      Vehículos
+    </a>
+    <a data-panel="logs">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      Logs / Tramas
+    </a>
+  </nav>
+
+  <!-- MAIN CONTENT -->
+  <main>
+
+    <!-- ══ DASHBOARD ══════════════════════════════════ -->
+    <div class="panel active" id="panel-dashboard">
+      <div class="stat-grid" id="stat-grid">
+        <div class="stat-card accent-green">
+          <div class="value" id="stat-online">—</div>
+          <div class="label">Dispositivos online</div>
+        </div>
+        <div class="stat-card accent-blue">
+          <div class="value" id="stat-vehicles">—</div>
+          <div class="label">Vehículos registrados</div>
+        </div>
+        <div class="stat-card accent-purple">
+          <div class="value" id="stat-reports">—</div>
+          <div class="label">Reportes totales</div>
+        </div>
+        <div class="stat-card">
+          <div class="value" id="stat-ports">—</div>
+          <div class="label">Puertos TCP / HTTP</div>
+        </div>
+      </div>
+
+      <!-- Online Devices -->
+      <div class="card">
+        <div class="card-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1"/></svg>
+          Dispositivos Conectados
+        </div>
+        <div id="devices-list" style="display:flex;flex-direction:column;gap:8px;">
+          <span style="color:var(--muted);font-size:13px;">Sin dispositivos online</span>
+        </div>
+      </div>
+
+      <!-- Latest Reports -->
+      <div class="card">
+        <div class="card-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+          Últimas Posiciones Recibidas
+        </div>
+        <div class="table-wrap">
+          <table id="latest-table">
+            <thead>
+              <tr>
+                <th>Vehículo</th><th>GPS</th><th>Lat / Lon</th><th>Velocidad</th><th>Rumbo</th><th>Hora GPS</th>
+              </tr>
+            </thead>
+            <tbody id="latest-tbody">
+              <tr><td colspan="6" style="color:var(--muted);text-align:center">Cargando...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ MAP ════════════════════════════════════════ -->
+    <div class="panel" id="panel-map">
+      <div class="card" style="padding:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div class="card-title" style="margin:0">Mapa en Vivo — OpenStreetMap</div>
+          <button class="btn btn-ghost btn-sm" onclick="centerAllVehicles()">Centrar todos</button>
+        </div>
+        <div id="map"></div>
+      </div>
+
+      <!-- Vehicle list below map -->
+      <div class="card">
+        <div class="card-title">Estado de vehículos</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Color</th><th>Vehículo</th><th>Patente</th><th>GPS</th><th>Velocidad</th><th>Última actualización</th><th></th></tr>
+            </thead>
+            <tbody id="map-vehicle-tbody">
+              <tr><td colspan="7" style="color:var(--muted);text-align:center">Sin datos</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ HISTORY ════════════════════════════════════ -->
+    <div class="panel" id="panel-history">
+      <div class="card">
+        <div class="card-title">Historial de Posiciones</div>
+        <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+          <div class="field">
+            <label>Vehículo</label>
+            <select id="history-vehicle-select" style="min-width:200px">
+              <option value="">— Seleccionar —</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Últimos N reportes</label>
+            <input type="number" id="history-limit" value="100" min="1" max="1000" style="width:90px" />
+          </div>
+          <button class="btn btn-primary" onclick="loadHistory()">Cargar</button>
+        </div>
+      </div>
+
+      <div class="card" style="padding:12px">
+        <div class="card-title" style="margin-bottom:10px">Trayectoria en mapa</div>
+        <div id="history-map" style="height:350px;border-radius:8px;border:1px solid var(--border)"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Tabla de posiciones</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>#</th><th>GPS</th><th>Latitud</th><th>Longitud</th><th>Velocidad</th><th>Rumbo</th><th>Estado</th><th>Hora GPS</th></tr>
+            </thead>
+            <tbody id="history-tbody">
+              <tr><td colspan="8" style="color:var(--muted);text-align:center">Seleccioná un vehículo</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ VEHICLES ═══════════════════════════════════ -->
+    <div class="panel" id="panel-vehicles">
+      <!-- Add form -->
+      <div class="card">
+        <div class="card-title">Registrar Nuevo Vehículo</div>
+        <div class="form-grid" id="add-form">
+          <div class="field">
+            <label>ID de Hardware <span style="color:var(--red)">*</span></label>
+            <input type="text" id="v-id" placeholder="ej: 9170264352" />
+          </div>
+          <div class="field">
+            <label>Nombre / Descripción</label>
+            <input type="text" id="v-name" placeholder="ej: Chevrolet Onyx Tomás" />
+          </div>
+          <div class="field">
+            <label>Patente / Dominio</label>
+            <input type="text" id="v-plate" placeholder="ej: ABC123" />
+          </div>
+          <div class="field">
+            <label>Color en mapa</label>
+            <input type="color" id="v-color" value="#4f6ef7" />
+          </div>
+        </div>
+        <div style="margin-top:16px">
+          <button class="btn btn-primary" onclick="addVehicle()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Registrar Vehículo
+          </button>
+        </div>
+      </div>
+
+      <!-- Vehicle list -->
+      <div class="card">
+        <div class="card-title">Vehículos Registrados</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Color</th><th>ID Hardware</th><th>Nombre</th><th>Patente</th><th>Registrado</th><th>Acciones</th></tr>
+            </thead>
+            <tbody id="vehicles-tbody">
+              <tr><td colspan="6" style="color:var(--muted);text-align:center">Cargando...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ LOGS ═══════════════════════════════════════ -->
+    <div class="panel" id="panel-logs">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div class="card-title" style="margin:0">Log del servidor (tiempo real)</div>
+          <button class="btn btn-ghost btn-sm" onclick="clearLogs()">Limpiar</button>
+        </div>
+        <div id="log-container"></div>
+      </div>
+
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div class="card-title" style="margin:0">Tramas Crudas Recibidas</div>
+          <button class="btn btn-ghost btn-sm" onclick="clearFrames()">Limpiar</button>
+        </div>
+        <div id="frames-container"></div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- EDIT MODAL -->
+<div class="modal-bg" id="edit-modal">
+  <div class="modal">
+    <h2>Editar Vehículo</h2>
+    <input type="hidden" id="edit-id" />
+    <div class="form-grid">
+      <div class="field">
+        <label>Nombre</label>
+        <input type="text" id="edit-name" />
+      </div>
+      <div class="field">
+        <label>Patente</label>
+        <input type="text" id="edit-plate" />
+      </div>
+      <div class="field">
+        <label>Color en mapa</label>
+        <input type="color" id="edit-color" />
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeEditModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveEdit()">Guardar cambios</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<!-- Scripts -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+// ══════════════════════════════════════════════════
+// NAVIGATION
+// ══════════════════════════════════════════════════
+document.querySelectorAll('nav.sidebar a[data-panel]').forEach(link => {
+  link.addEventListener('click', () => {
+    document.querySelectorAll('nav.sidebar a').forEach(a => a.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    link.classList.add('active');
+    document.getElementById('panel-' + link.dataset.panel).classList.add('active');
+
+    // Init maps lazily
+    if (link.dataset.panel === 'map' && !mapInited) initLiveMap();
+    if (link.dataset.panel === 'history' && !histMapInited) initHistoryMap();
+    if (link.dataset.panel === 'vehicles') loadVehicles();
+    if (link.dataset.panel === 'history') loadVehiclesIntoSelect();
+    if (link.dataset.panel === 'dashboard') loadLatest();
+  });
+});
+
+// ══════════════════════════════════════════════════
+// TOAST
+// ══════════════════════════════════════════════════
+function toast(msg, type = 'success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `show ${type}`;
+  setTimeout(() => el.className = '', 3000);
+}
+
+// ══════════════════════════════════════════════════
+// SOCKET.IO
+// ══════════════════════════════════════════════════
+const socket = io();
+
+socket.on('log', entry => appendLog(entry));
+socket.on('logs', entries => { entries.forEach(appendLog); });
+socket.on('rawFrame', f => appendFrame(f));
+
+socket.on('locationUpdate', data => {
+  updateLiveMarker(data);
+  loadLatest();
+  loadStats();
+});
+
+socket.on('devicesOnline', devices => {
+  updateDevicesList(devices);
+  loadStats();
+});
+
+socket.on('vehiclesChanged', () => {
+  loadVehicles();
+  loadVehiclesIntoSelect();
+  loadStats();
+});
+
+// ══════════════════════════════════════════════════
+// STATS
+// ══════════════════════════════════════════════════
+async function loadStats() {
+  const r = await fetch('/api/stats');
+  const s = await r.json();
+  document.getElementById('stat-online').textContent = s.devicesOnline;
+  document.getElementById('stat-vehicles').textContent = s.vehicleCount;
+  document.getElementById('stat-reports').textContent = s.reportCount.toLocaleString();
+  document.getElementById('stat-ports').textContent = `${s.tcpPort} / ${s.httpPort}`;
+  document.getElementById('pill-stats').textContent = `${s.vehicleCount} vehículos · ${s.reportCount.toLocaleString()} reportes`;
+}
+
+function updateDevicesList(devices) {
+  const el = document.getElementById('devices-list');
+  const pill = document.getElementById('pill-tcp');
+  const pillText = document.getElementById('pill-tcp-text');
+
+  if (!devices.length) {
+    el.innerHTML = '<span style="color:var(--muted);font-size:13px;">Sin dispositivos online</span>';
+    pill.className = 'pill offline';
+    pillText.textContent = 'TCP — offline';
+    return;
+  }
+
+  pill.className = 'pill online';
+  pillText.textContent = `TCP — ${devices.length} online`;
+
+  el.innerHTML = devices.map(d => `
+    <div class="device-item">
+      <div>
+        <div class="dev-id">${d.id}</div>
+        <div class="dev-meta">${d.remoteAddr} · cmd: ${d.comando}</div>
+      </div>
+      <div>
+        <span class="badge green">● online</span>
+        <div class="dev-meta" style="text-align:right;margin-top:3px">${new Date(d.lastSeen).toLocaleTimeString()}</div>
+      </div>
+    </div>`).join('');
+}
+
+// ══════════════════════════════════════════════════
+// LATEST TABLE
+// ══════════════════════════════════════════════════
+async function loadLatest() {
+  const r = await fetch('/api/vehicles/latest');
+  const vehicles = await r.json();
+  const tbody = document.getElementById('latest-tbody');
+
+  if (!vehicles.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);text-align:center">Sin reportes aún</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = vehicles.map(v => {
+    const rep = v.reports[0];
+    if (!rep) return `<tr>
+      <td><span class="swatch" style="background:${v.color||'#4f6ef7'}"></span>${v.name || v.id}</td>
+      <td colspan="5" style="color:var(--muted)">Sin reportes</td>
+    </tr>`;
+    return `<tr>
+      <td><span class="swatch" style="background:${v.color||'#4f6ef7'}"></span>${v.name || v.id}</td>
+      <td><span class="badge ${rep.validGps ? 'green' : 'red'}">${rep.validGps ? 'Fix' : 'Sin Fix'}</span></td>
+      <td>${rep.latitude.toFixed(6)}, ${rep.longitude.toFixed(6)}</td>
+      <td>${rep.speed.toFixed(1)} km/h</td>
+      <td>${rep.course.toFixed(0)}°</td>
+      <td>${new Date(rep.timestamp).toLocaleString()}</td>
+    </tr>`;
+  }).join('');
+
+  // Update map vehicle table
+  updateMapVehicleTable(vehicles);
+}
+
+function updateMapVehicleTable(vehicles) {
+  const tbody = document.getElementById('map-vehicle-tbody');
+  if (!vehicles.length) return;
+  tbody.innerHTML = vehicles.map(v => {
+    const rep = v.reports[0];
+    return `<tr>
+      <td><span class="swatch" style="background:${v.color||'#4f6ef7'}"></span></td>
+      <td>${v.name || v.id}</td>
+      <td>${v.plate || '—'}</td>
+      <td>${rep ? `<span class="badge ${rep.validGps ? 'green' : 'red'}">${rep.validGps ? 'Fix' : 'Sin Fix'}</span>` : '—'}</td>
+      <td>${rep ? rep.speed.toFixed(1) + ' km/h' : '—'}</td>
+      <td>${rep ? new Date(rep.timestamp).toLocaleString() : '—'}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="focusVehicle('${v.id}')">Ver</button></td>
+    </tr>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════════
+// LIVE MAP
+// ══════════════════════════════════════════════════
+let liveMap, mapInited = false;
+const liveMarkers = {}; // vehicleId -> marker
+const liveTails = {};   // vehicleId -> [latlng]
+const MAX_TAIL = 10;
+
+function initLiveMap() {
+  mapInited = true;
+  liveMap = L.map('map').setView([-34.6037, -58.3816], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors', maxZoom: 19
+  }).addTo(liveMap);
+
+  // Load current positions
+  loadLatestOnMap();
+}
+
+async function loadLatestOnMap() {
+  const r = await fetch('/api/vehicles/latest');
+  const vehicles = await r.json();
+  vehicles.forEach(v => {
+    const rep = v.reports[0];
+    if (rep && rep.validGps) {
+      updateLiveMarker({
+        vehicleId: v.id,
+        vehicleName: v.name || v.id,
+        vehicleColor: v.color || '#4f6ef7',
+        latitude: rep.latitude,
+        longitude: rep.longitude,
+        speed: rep.speed,
+        course: rep.course,
+        validGps: rep.validGps,
+        timestamp: rep.timestamp
+      });
+    }
+  });
+}
+
+function makeMarkerIcon(color) {
+  return L.divIcon({
+    className: '',
+    html: `<svg width="30" height="40" viewBox="0 0 30 40">
+      <ellipse cx="15" cy="37" rx="6" ry="3" fill="rgba(0,0,0,.3)"/>
+      <path d="M15 0 C7 0 1 6 1 14 C1 24 15 36 15 36 C15 36 29 24 29 14 C29 6 23 0 15 0Z" fill="${color}" stroke="#fff" stroke-width="2"/>
+      <circle cx="15" cy="14" r="6" fill="#fff" opacity=".9"/>
+    </svg>`,
+    iconSize: [30, 40],
+    iconAnchor: [15, 38],
+    popupAnchor: [0, -38]
+  });
+}
+
+function updateLiveMarker(data) {
+  if (!mapInited || !data.validGps) return;
+  const latlng = [data.latitude, data.longitude];
+
+  if (!liveTails[data.vehicleId]) liveTails[data.vehicleId] = [];
+  liveTails[data.vehicleId].push(latlng);
+  if (liveTails[data.vehicleId].length > MAX_TAIL) liveTails[data.vehicleId].shift();
+
+  if (liveMarkers[data.vehicleId]) {
+    liveMarkers[data.vehicleId].setLatLng(latlng);
+    liveMarkers[data.vehicleId].setIcon(makeMarkerIcon(data.vehicleColor));
+    liveMarkers[data.vehicleId].bindPopup(makePopupContent(data));
+    // Update tail polyline
+    if (liveMarkers[data.vehicleId]._tail) {
+      liveMarkers[data.vehicleId]._tail.setLatLngs(liveTails[data.vehicleId]);
+    }
+  } else {
+    const marker = L.marker(latlng, { icon: makeMarkerIcon(data.vehicleColor) })
+      .bindPopup(makePopupContent(data))
+      .addTo(liveMap);
+    const tail = L.polyline(liveTails[data.vehicleId], { color: data.vehicleColor, weight: 2, opacity: .6, dashArray: '4 6' }).addTo(liveMap);
+    marker._tail = tail;
+    liveMarkers[data.vehicleId] = marker;
+  }
+}
+
+function makePopupContent(data) {
+  return `
+    <b style="font-size:14px">${data.vehicleName}</b><br>
+    <span style="color:#666">ID: ${data.vehicleId}</span><br><br>
+    📍 ${data.latitude.toFixed(6)}, ${data.longitude.toFixed(6)}<br>
+    🚀 ${data.speed.toFixed(1)} km/h &nbsp; 🧭 ${data.course.toFixed(0)}°<br>
+    🕐 ${new Date(data.timestamp).toLocaleString()}
+  `;
+}
+
+function centerAllVehicles() {
+  if (!mapInited) return;
+  const positions = Object.values(liveMarkers).map(m => m.getLatLng());
+  if (positions.length) liveMap.fitBounds(positions.map(p => [p.lat, p.lng]), { padding: [40, 40] });
+}
+
+function focusVehicle(id) {
+  document.querySelector('[data-panel="map"]').click();
+  setTimeout(() => {
+    if (liveMarkers[id]) {
+      liveMap.setView(liveMarkers[id].getLatLng(), 16);
+      liveMarkers[id].openPopup();
+    }
+  }, 100);
+}
+
+// ══════════════════════════════════════════════════
+// HISTORY
+// ══════════════════════════════════════════════════
+let histMap, histMapInited = false, histPolyline, histMarkers = [];
+
+function initHistoryMap() {
+  histMapInited = true;
+  histMap = L.map('history-map').setView([-34.6037, -58.3816], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors', maxZoom: 19
+  }).addTo(histMap);
+}
+
+async function loadVehiclesIntoSelect() {
+  const r = await fetch('/api/vehicles');
+  const vehicles = await r.json();
+  const sel = document.getElementById('history-vehicle-select');
+  sel.innerHTML = '<option value="">— Seleccionar —</option>' +
+    vehicles.map(v => `<option value="${v.id}">${v.name || v.id}${v.plate ? ' · ' + v.plate : ''}</option>`).join('');
+}
+
+async function loadHistory() {
+  const vid = document.getElementById('history-vehicle-select').value;
+  const limit = document.getElementById('history-limit').value || 100;
+  if (!vid) { toast('Seleccioná un vehículo', 'warn'); return; }
+
+  const r = await fetch(`/api/vehicles/${vid}/history?limit=${limit}`);
+  const history = await r.json();
+
+  const tbody = document.getElementById('history-tbody');
+  if (!history.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="color:var(--muted);text-align:center">Sin reportes para este vehículo</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = history.map((rep, i) => `<tr>
+    <td style="color:var(--muted)">${i + 1}</td>
+    <td><span class="badge ${rep.validGps ? 'green' : 'red'}">${rep.validGps ? 'Fix' : 'NoFix'}</span></td>
+    <td>${rep.latitude.toFixed(6)}</td>
+    <td>${rep.longitude.toFixed(6)}</td>
+    <td>${rep.speed.toFixed(1)} km/h</td>
+    <td>${rep.course.toFixed(0)}°</td>
+    <td><code style="font-size:11px">${rep.statusHex}</code></td>
+    <td>${new Date(rep.timestamp).toLocaleString()}</td>
+  </tr>`).join('');
+
+  // Draw on history map
+  if (histMapInited) drawHistoryOnMap(history);
+}
+
+function drawHistoryOnMap(history) {
+  histMarkers.forEach(m => histMap.removeLayer(m));
+  histMarkers = [];
+  if (histPolyline) histMap.removeLayer(histPolyline);
+
+  const validPoints = history.filter(r => r.validGps && r.latitude && r.longitude);
+  if (!validPoints.length) return;
+
+  const latlngs = validPoints.map(r => [r.latitude, r.longitude]);
+
+  histPolyline = L.polyline(latlngs, { color: '#4f6ef7', weight: 3, opacity: .8 }).addTo(histMap);
+
+  // Start marker (green)
+  const startM = L.circleMarker(latlngs[latlngs.length - 1], { radius: 8, fillColor: '#22c55e', color: '#fff', weight: 2, fillOpacity: 1 })
+    .bindPopup('<b>Inicio</b><br>' + new Date(validPoints[validPoints.length - 1].timestamp).toLocaleString())
+    .addTo(histMap);
+  histMarkers.push(startM);
+
+  // End marker (red)
+  const endM = L.circleMarker(latlngs[0], { radius: 8, fillColor: '#ef4444', color: '#fff', weight: 2, fillOpacity: 1 })
+    .bindPopup('<b>Último punto</b><br>' + new Date(validPoints[0].timestamp).toLocaleString())
+    .addTo(histMap);
+  histMarkers.push(endM);
+
+  histMap.fitBounds(histPolyline.getBounds(), { padding: [30, 30] });
+}
+
+// ══════════════════════════════════════════════════
+// VEHICLES MANAGEMENT
+// ══════════════════════════════════════════════════
+async function loadVehicles() {
+  const r = await fetch('/api/vehicles');
+  const vehicles = await r.json();
+  const tbody = document.getElementById('vehicles-tbody');
+
+  if (!vehicles.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);text-align:center">No hay vehículos registrados</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = vehicles.map(v => `<tr>
+    <td><span class="swatch" style="background:${v.color||'#4f6ef7'}"></span></td>
+    <td><code style="font-size:12px">${v.id}</code></td>
+    <td>${v.name || '<span style="color:var(--muted)">—</span>'}</td>
+    <td>${v.plate || '<span style="color:var(--muted)">—</span>'}</td>
+    <td>${new Date(v.createdAt).toLocaleDateString()}</td>
+    <td style="display:flex;gap:6px">
+      <button class="btn btn-ghost btn-sm" onclick="openEditModal('${v.id}','${v.name||''}','${v.plate||''}','${v.color||'#4f6ef7'}')">Editar</button>
+      <button class="btn btn-danger btn-sm" onclick="deleteVehicle('${v.id}')">Eliminar</button>
+    </td>
+  </tr>`).join('');
+}
+
+async function addVehicle() {
+  const id    = document.getElementById('v-id').value.trim();
+  const name  = document.getElementById('v-name').value.trim();
+  const plate = document.getElementById('v-plate').value.trim();
+  const color = document.getElementById('v-color').value;
+
+  if (!id) { toast('El ID de hardware es obligatorio', 'error'); return; }
+
+  const r = await fetch('/api/vehicles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, name, plate, color })
+  });
+  const data = await r.json();
+  if (!r.ok) { toast(data.error || 'Error al crear', 'error'); return; }
+
+  toast(`Vehículo "${name || id}" registrado ✓`);
+  document.getElementById('v-id').value = '';
+  document.getElementById('v-name').value = '';
+  document.getElementById('v-plate').value = '';
+  loadVehicles();
+}
+
+function openEditModal(id, name, plate, color) {
+  document.getElementById('edit-id').value = id;
+  document.getElementById('edit-name').value = name;
+  document.getElementById('edit-plate').value = plate;
+  document.getElementById('edit-color').value = color;
+  document.getElementById('edit-modal').classList.add('open');
+}
+
+function closeEditModal() {
+  document.getElementById('edit-modal').classList.remove('open');
+}
+
+async function saveEdit() {
+  const id    = document.getElementById('edit-id').value;
+  const name  = document.getElementById('edit-name').value.trim();
+  const plate = document.getElementById('edit-plate').value.trim();
+  const color = document.getElementById('edit-color').value;
+
+  const r = await fetch(`/api/vehicles/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, plate, color })
+  });
+  const data = await r.json();
+  if (!r.ok) { toast(data.error || 'Error al actualizar', 'error'); return; }
+
+  toast('Vehículo actualizado ✓');
+  closeEditModal();
+  loadVehicles();
+}
+
+async function deleteVehicle(id) {
+  if (!confirm(`¿Eliminar vehículo ${id} y TODO su historial? Esta acción no se puede deshacer.`)) return;
+  const r = await fetch(`/api/vehicles/${id}`, { method: 'DELETE' });
+  if (r.ok) { toast(`Vehículo ${id} eliminado`, 'warn'); loadVehicles(); }
+  else { const d = await r.json(); toast(d.error || 'Error', 'error'); }
+}
+
+// ══════════════════════════════════════════════════
+// LOGS
+// ══════════════════════════════════════════════════
+function appendLog(entry) {
+  const c = document.getElementById('log-container');
+  const t = new Date(entry.time).toLocaleTimeString();
+  const div = document.createElement('div');
+  div.className = `log-entry log-${entry.level}`;
+  div.innerHTML = `<span class="log-time">${t}</span><span class="log-msg">${escHtml(entry.message)}</span>`;
+  c.appendChild(div);
+  c.scrollTop = c.scrollHeight;
+}
+
+function appendFrame(f) {
+  const c = document.getElementById('frames-container');
+  const t = new Date(f.time).toLocaleTimeString();
+  const div = document.createElement('div');
+  div.className = 'frame-entry';
+  div.innerHTML = `<span class="ft">${t}</span>${escHtml(f.raw)}`;
+  c.appendChild(div);
+  c.scrollTop = c.scrollHeight;
+}
+
+function clearLogs()   { document.getElementById('log-container').innerHTML = ''; }
+function clearFrames() { document.getElementById('frames-container').innerHTML = ''; }
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ══════════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════════
+loadStats();
+loadLatest();
+</script>
+</body>
+</html>

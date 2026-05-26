@@ -1,0 +1,28 @@
+{
+  "name": "sinotrack-st902l-server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "db:migrate": "npx prisma migrate dev --name init",
+    "db:generate": "npx prisma generate",
+    "db:studio": "npx prisma studio",
+    "setup": "npm install && npx prisma generate"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@prisma/client": "^5.11.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "pg": "^8.21.0",
+    "socket.io": "^4.8.3"
+  },
+  "devDependencies": {
+    "prisma": "^5.11.0"
+  }
+}
