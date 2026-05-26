@@ -41,6 +41,7 @@ function parseDmsToDecimal(coordStr, direction) {
   let degreeLength = isLongitude ? 3 : 2;
   let degrees = parseFloat(coordStr.substring(0, degreeLength));
   let minutes = parseFloat(coordStr.substring(degreeLength));
+  // Tracker omite cero inicial en longitud (e.g. "5840.1280" en vez de "05840.1280")
   if (isLongitude && degrees > 180) {
     degreeLength = 2;
     degrees = parseFloat(coordStr.substring(0, degreeLength));
