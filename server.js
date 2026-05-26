@@ -4,9 +4,8 @@ const express = require('express');
 const http = require('http');
 const { Server: SocketIOServer } = require('socket.io');
 const path = require('path');
-const { PrismaClient } = require('@prisma/client'); // Cleaned up V7 adapter garbage
+const { PrismaClient } = require('@prisma/client');
 
-// Inicialización limpia y directa
 const prisma = new PrismaClient();
 const app = express();
 const httpServer = http.createServer(app);
@@ -16,7 +15,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ==========================================
-// 📋 LOG SYSTEM (streams to UI via Socket.IO)
+// 📋 LOG SYSTEM
 // ==========================================
 
 const MAX_LOGS = 200;
@@ -32,7 +31,7 @@ function log(level, message) {
 }
 
 // ==========================================
-// 🧮 GPS PARSE UTILS (Protocolo H02)
+// 🧮 GPS PARSE UTILS — H02
 // ==========================================
 
 function parseDmsToDecimal(coordStr, direction) {
@@ -41,7 +40,6 @@ function parseDmsToDecimal(coordStr, direction) {
   let degreeLength = isLongitude ? 3 : 2;
   let degrees = parseFloat(coordStr.substring(0, degreeLength));
   let minutes = parseFloat(coordStr.substring(degreeLength));
-  // Tracker omite cero inicial en longitud (e.g. "5840.1280" en vez de "05840.1280")
   if (isLongitude && degrees > 180) {
     degreeLength = 2;
     degrees = parseFloat(coordStr.substring(0, degreeLength));
@@ -51,6 +49,7 @@ function parseDmsToDecimal(coordStr, direction) {
   if (direction === 'S' || direction === 'W') decimal *= -1;
   return parseFloat(decimal.toFixed(6));
 }
+
 function parseGpsDate(dateStr, timeStr) {
   const day   = parseInt(dateStr.substring(0, 2));
   const month = parseInt(dateStr.substring(2, 4)) - 1;
@@ -60,6 +59,12 @@ function parseGpsDate(dateStr, timeStr) {
   const s = parseInt(timeStr.substring(4, 6));
   return new Date(Date.UTC(year, month, day, h, m, s));
 }
+
+// ==========================================
+// 📡 GPS PARSE UTILS — Binary $p protocol
+// ==========================================
+
+function bcdToStr(bytes) {
   return Array.from(bytes).map(b =>
     String((b >> 4) & 0xF) + String(b & 0xF)
   ).join('');
@@ -70,9 +75,9 @@ function parseBinaryFrame(data) {
 
   const deviceId = bcdToStr(data.slice(1, 6));
 
-  const h = ((data[6] >> 4) & 0xF) * 10 + (data[6] & 0xF);
-  const m = ((data[7] >> 4) & 0xF) * 10 + (data[7] & 0xF);
-  const s = ((data[8] >> 4) & 0xF) * 10 + (data[8] & 0xF);
+  const h  = ((data[6]  >> 4) & 0xF) * 10 + (data[6]  & 0xF);
+  const m  = ((data[7]  >> 4) & 0xF) * 10 + (data[7]  & 0xF);
+  const s  = ((data[8]  >> 4) & 0xF) * 10 + (data[8]  & 0xF);
   const dd = ((data[9]  >> 4) & 0xF) * 10 + (data[9]  & 0xF);
   const mo = ((data[10] >> 4) & 0xF) * 10 + (data[10] & 0xF);
   const yy = 2000 + ((data[11] >> 4) & 0xF) * 10 + (data[11] & 0xF);
@@ -95,36 +100,16 @@ function parseBinaryFrame(data) {
   let longitude = parseFloat((lonDeg + lonMin / 60).toFixed(6));
   if (isWest) longitude = -longitude;
 
-  const speedKmH = parseFloat(((data[22] << 8 | data[23])).toFixed(2));
-  const statusHex = data.slice(25, 29).toString('hex').toUpperCase();
+  const speedKmH = data[22] << 8 | data[23];
+  const statusHex = data.length >= 29
+    ? data.slice(25, 29).toString('hex').toUpperCase()
+    : '00000000';
 
   return { deviceId, timestamp, validGps, latitude, longitude, speedKmH, course: 0, statusHex };
 }
 
-Luego en socket.on('data', async (data) => {, al principio del handler, antes del const rawString = ..., agregá:
-
-  // Binary $p frame
-  if (data[0] === 0x24) {
-    const parsed = parseBinaryFrame(data);
-    if (!parsed || !parsed.validGps) return;
-    const { deviceId, timestamp, validGps, latitude, longitude, speedKmH, course, statusHex } = parsed;
-    const vehicleExists = await prisma.vehicle.findUnique({ where: { id: deviceId } });
-    if (!vehicleExists) { log('warn', `[BIN] RECHAZADO ${deviceId} no registrado`); return; }
-    await prisma.locationReport.create({
-      data: { vehicleId: deviceId, timestamp, validGps, latitude, longitude, speed: speedKmH, course, statusHex }
-    });
-    log('success', `[BIN] Guardado ${deviceId} | Lat:${latitude} Lon:${longitude} | ${speedKmH}km/h`);
-    io.emit('locationUpdate', {
-      vehicleId: deviceId,
-      vehicleName: vehicleExists.name || deviceId,
-      vehicleColor: vehicleExists.color || '#3B82F6',
-      latitude, longitude, speed: speedKmH, course, validGps,
-      timestamp: timestamp.toISOString()
-    });
-    return;
-  }
 // ==========================================
-// 🔌 TCP SERVER (listens to GPS tracker)
+// 🔌 TCP SERVER
 // ==========================================
 
 let tcpPort = parseInt(process.env.TCP_PORT || '5013');
@@ -135,30 +120,32 @@ const tcpServer = net.createServer((socket) => {
   log('info', `Rastreador conectado: ${remoteAddr}`);
 
   socket.on('data', async (data) => {
-      if (data[0] === 0x24) {
-    const parsed = parseBinaryFrame(data);
-    if (!parsed || !parsed.validGps) return;
-    const { deviceId, timestamp, validGps, latitude, longitude, speedKmH, course, statusHex } = parsed;
-    const vehicleExists = await prisma.vehicle.findUnique({ where: { id: deviceId } });
-    if (!vehicleExists) { log('warn', `[BIN] RECHAZADO ${deviceId} no registrado`); return; }
-    await prisma.locationReport.create({
-      data: { vehicleId: deviceId, timestamp, validGps, latitude, longitude, speed: speedKmH, course, statusHex }
-    });
-    log('success', `[BIN] Guardado ${deviceId} | Lat:${latitude} Lon:${longitude} | ${speedKmH}km/h`);
-    io.emit('locationUpdate', {
-      vehicleId: deviceId,
-      vehicleName: vehicleExists.name || deviceId,
-      vehicleColor: vehicleExists.color || '#3B82F6',
-      latitude, longitude, speed: speedKmH, course, validGps,
-      timestamp: timestamp.toISOString()
-    });
-    return;
-  }
-const rawString = data.toString('ascii').trim();
-if (data[0] === 0x24) {
-  log('info', `[BIN HEX] ${data.toString('hex')}`);
-  return;
-}
+
+    // ── Binary $p frame ──────────────────────────────────────
+    if (data[0] === 0x24) {
+      const parsed = parseBinaryFrame(data);
+      if (!parsed || !parsed.validGps) return;
+      const { deviceId, timestamp, validGps, latitude, longitude, speedKmH, course, statusHex } = parsed;
+      const vehicleExists = await prisma.vehicle.findUnique({ where: { id: deviceId } });
+      if (!vehicleExists) { log('warn', `[BIN] RECHAZADO ${deviceId} no registrado`); return; }
+      await prisma.locationReport.create({
+        data: { vehicleId: deviceId, timestamp, validGps, latitude, longitude, speed: speedKmH, course, statusHex }
+      });
+      log('success', `[BIN] Guardado ${deviceId} | Lat:${latitude} Lon:${longitude} | ${speedKmH}km/h`);
+      io.emit('locationUpdate', {
+        vehicleId: deviceId,
+        vehicleName: vehicleExists.name || deviceId,
+        vehicleColor: vehicleExists.color || '#3B82F6',
+        latitude, longitude, speed: speedKmH, course, validGps,
+        timestamp: timestamp.toISOString()
+      });
+      connectedDevices.set(deviceId, { remoteAddr, lastSeen: new Date().toISOString(), comando: 'BIN' });
+      io.emit('devicesOnline', Array.from(connectedDevices.entries()).map(([id, info]) => ({ id, ...info })));
+      return;
+    }
+
+    // ── H02 text frame ───────────────────────────────────────
+    const rawString = data.toString('ascii').trim();
     log('info', `[RAW] ${rawString}`);
     io.emit('rawFrame', { raw: rawString, time: new Date().toISOString() });
 
@@ -211,11 +198,7 @@ if (data[0] === 0x24) {
         vehicleId: deviceId,
         vehicleName: vehicleExists.name || deviceId,
         vehicleColor: vehicleExists.color || '#3B82F6',
-        latitude,
-        longitude,
-        speed: speedKmH,
-        course,
-        validGps,
+        latitude, longitude, speed: speedKmH, course, validGps,
         timestamp: timestamp.toISOString()
       });
 
