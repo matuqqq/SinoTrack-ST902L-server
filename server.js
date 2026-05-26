@@ -38,9 +38,15 @@ function log(level, message) {
 function parseDmsToDecimal(coordStr, direction) {
   if (!coordStr) return null;
   const isLongitude = direction === 'W' || direction === 'E';
-  const degreeLength = isLongitude ? 3 : 2;
-  const degrees = parseFloat(coordStr.substring(0, degreeLength));
-  const minutes = parseFloat(coordStr.substring(degreeLength));
+  let degreeLength = isLongitude ? 3 : 2;
+  let degrees = parseFloat(coordStr.substring(0, degreeLength));
+  let minutes = parseFloat(coordStr.substring(degreeLength));
+  // Tracker omite cero inicial en longitud (e.g. "5840.1280" en vez de "05840.1280")
+  if (isLongitude && degrees > 180) {
+    degreeLength = 2;
+    degrees = parseFloat(coordStr.substring(0, degreeLength));
+    minutes = parseFloat(coordStr.substring(degreeLength));
+  }
   let decimal = degrees + minutes / 60;
   if (direction === 'S' || direction === 'W') decimal *= -1;
   return parseFloat(decimal.toFixed(6));
