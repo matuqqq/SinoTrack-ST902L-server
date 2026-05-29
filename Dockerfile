@@ -6,6 +6,7 @@ COPY prisma ./prisma
 RUN npx prisma generate
 
 FROM node:22-alpine
+RUN apk add --no-cache openssl
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
