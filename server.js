@@ -1,23 +1,78 @@
+require('./lib/env');
 require('dotenv').config();
+
 const net = require('net');
 const express = require('express');
 const http = require('http');
 const { Server: SocketIOServer } = require('socket.io');
 const path = require('path');
-const { PrismaClient } = require('@prisma/client');
+const helmet = require('helmet');
+const cors = require('cors');
+const rateLimit = require('express-rate-limit');
+const morgan = require('morgan');
+const jwt = require('jsonwebtoken');
+const swaggerUi = require('swagger-ui-express');
 
-const prisma = new PrismaClient();
+const prisma = require('./lib/prisma');
+const { dispatch } = require('./lib/webhook');
+const { sendSpeedAlert } = require('./lib/mailer');
+const { parseStatusHex } = require('./lib/statusHex');
+const swaggerSpec = require('./swagger');
+
+const authRouter        = require('./routes/auth');
+const vehiclesRouter    = require('./routes/vehicles');
+const systemRouter      = require('./routes/system');
+const geofencesRouter   = require('./routes/geofences');
+const tripsRouter       = require('./routes/trips');
+const adminRouter       = require('./routes/admin');
+const analyticsRouter   = require('./routes/analytics');
+const geocodeRouter     = require('./routes/geocode');
+const webhooksRouter    = require('./routes/webhooks');
+const apikeysRouter     = require('./routes/apikeys');
+const notificationsRouter = require('./routes/notifications');
+
+const { checkGeofences }    = require('./jobs/geofence');
+const { processTripPoint }  = require('./jobs/tripDetector');
+const { processIdlePoint }  = require('./jobs/idleDetector');
+const { startRetentionJob } = require('./jobs/retention');
+const { startDeviceTimeoutJob } = require('./jobs/deviceTimeout');
+const { startWeeklyReportJob }  = require('./jobs/weeklyReport');
+
 const app = express();
 const httpServer = http.createServer(app);
-const io = new SocketIOServer(httpServer);
+const io = new SocketIOServer(httpServer, {
+  cors: { origin: process.env.CORS_ORIGIN || '*', methods: ['GET', 'POST'] }
+});
 
+// ==========================================
+// 🛡️ SECURITY & LOGGING
+// ==========================================
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(cors({ origin: process.env.CORS_ORIGIN || '*', methods: ['GET','POST','PUT','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','Authorization','X-API-Key'] }));
+app.use(morgan('short'));
 app.use(express.json());
+
+const authLimiter = rateLimit({ windowMs: 15*60*1000, max: 20, message: { error: 'Demasiados intentos — esperá 15 minutos' }, standardHeaders: true, legacyHeaders: false });
+const apiLimiter  = rateLimit({ windowMs: 60*1000, max: 300, message: { error: 'Rate limit excedido' }, standardHeaders: true, legacyHeaders: false });
+
+app.use('/api', apiLimiter);
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ==========================================
+// 💚 HEALTH CHECK (sin auth)
+// ==========================================
+app.get('/health', async (req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ status: 'ok', uptime: parseFloat(process.uptime().toFixed(1)), timestamp: new Date().toISOString(), db: 'ok' });
+  } catch (e) {
+    res.status(503).json({ status: 'error', uptime: parseFloat(process.uptime().toFixed(1)), timestamp: new Date().toISOString(), db: 'error', error: e.message });
+  }
+});
 
 // ==========================================
 // 📋 LOG SYSTEM
 // ==========================================
-
 const MAX_LOGS = 200;
 const logBuffer = [];
 
@@ -26,304 +81,171 @@ function log(level, message) {
   logBuffer.push(entry);
   if (logBuffer.length > MAX_LOGS) logBuffer.shift();
   io.emit('log', entry);
-  const prefix = { info: '📌', warn: '⚠️ ', error: '❌', success: '💾' }[level] || '  ';
+  const prefix = { info:'📌', warn:'⚠️ ', error:'❌', success:'💾' }[level] || '  ';
   console.log(`[${new Date().toLocaleTimeString()}] ${prefix} ${message}`);
 }
 
 // ==========================================
-// 🧮 GPS PARSE UTILS — H02
+// 🧮 GPS PARSE UTILS
 // ==========================================
-
 function parseDmsToDecimal(coordStr, direction) {
   if (!coordStr) return null;
-  const isLongitude = direction === 'W' || direction === 'E';
-  let degreeLength = isLongitude ? 3 : 2;
-  let degrees = parseFloat(coordStr.substring(0, degreeLength));
-  let minutes = parseFloat(coordStr.substring(degreeLength));
-  if (isLongitude && degrees > 180) {
-    degreeLength = 2;
-    degrees = parseFloat(coordStr.substring(0, degreeLength));
-    minutes = parseFloat(coordStr.substring(degreeLength));
-  }
-  let decimal = degrees + minutes / 60;
-  if (direction === 'S' || direction === 'W') decimal *= -1;
-  return parseFloat(decimal.toFixed(6));
+  const isLon = direction === 'W' || direction === 'E';
+  let degLen = isLon ? 3 : 2;
+  let deg = parseFloat(coordStr.substring(0, degLen));
+  let min = parseFloat(coordStr.substring(degLen));
+  if (isLon && deg > 180) { degLen = 2; deg = parseFloat(coordStr.substring(0, degLen)); min = parseFloat(coordStr.substring(degLen)); }
+  let dec = deg + min / 60;
+  if (direction === 'S' || direction === 'W') dec *= -1;
+  return parseFloat(dec.toFixed(6));
 }
 
 function parseGpsDate(dateStr, timeStr) {
-  const day   = parseInt(dateStr.substring(0, 2));
-  const month = parseInt(dateStr.substring(2, 4)) - 1;
-  const year  = 2000 + parseInt(dateStr.substring(4, 6));
-  const h = parseInt(timeStr.substring(0, 2));
-  const m = parseInt(timeStr.substring(2, 4));
-  const s = parseInt(timeStr.substring(4, 6));
-  return new Date(Date.UTC(year, month, day, h, m, s));
+  return new Date(Date.UTC(
+    2000 + parseInt(dateStr.substring(4, 6)),
+    parseInt(dateStr.substring(2, 4)) - 1,
+    parseInt(dateStr.substring(0, 2)),
+    parseInt(timeStr.substring(0, 2)),
+    parseInt(timeStr.substring(2, 4)),
+    parseInt(timeStr.substring(4, 6))
+  ));
 }
 
-// ==========================================
-// 📡 GPS PARSE UTILS — Binary $p protocol
-// ==========================================
-
 function bcdToStr(bytes) {
-  return Array.from(bytes).map(b =>
-    String((b >> 4) & 0xF) + String(b & 0xF)
-  ).join('');
+  return Array.from(bytes).map(b => String((b>>4)&0xF) + String(b&0xF)).join('');
 }
 
 function parseBinaryFrame(data) {
   if (data[0] !== 0x24 || data.length < 22) return null;
-
   const deviceId = bcdToStr(data.slice(1, 6));
-
-  const h  = ((data[6]  >> 4) & 0xF) * 10 + (data[6]  & 0xF);
-  const m  = ((data[7]  >> 4) & 0xF) * 10 + (data[7]  & 0xF);
-  const s  = ((data[8]  >> 4) & 0xF) * 10 + (data[8]  & 0xF);
-  const dd = ((data[9]  >> 4) & 0xF) * 10 + (data[9]  & 0xF);
-  const mo = ((data[10] >> 4) & 0xF) * 10 + (data[10] & 0xF);
-  const yy = 2000 + ((data[11] >> 4) & 0xF) * 10 + (data[11] & 0xF);
-  const timestamp = new Date(Date.UTC(yy, mo - 1, dd, h, m, s));
-
-  const flags    = data[16];
-  const validGps = (flags & 0x04) !== 0;
-  const isSouth  = (flags & 0x02) !== 0;
-  const isWest   = (flags & 0x01) === 0;
-
-  const latStr = bcdToStr(data.slice(12, 16));
-  const latDeg = parseInt(latStr.substring(0, 2));
-  const latMin = parseFloat(latStr.substring(2, 4) + '.' + latStr.substring(4));
-  let latitude = parseFloat((latDeg + latMin / 60).toFixed(6));
-  if (isSouth) latitude = -latitude;
-
-  const lonStr = bcdToStr(data.slice(17, 21));
-  const lonDeg = parseInt(lonStr.substring(0, 3));
-  const lonMin = parseFloat(lonStr.substring(3, 5) + '.' + lonStr.substring(5));
-  let longitude = parseFloat((lonDeg + lonMin / 60).toFixed(6));
-  if (isWest) longitude = -longitude;
-
-  const speedKmH = data[22] << 8 | data[23];
-  const statusHex = data.length >= 29
-    ? data.slice(25, 29).toString('hex').toUpperCase()
-    : '00000000';
-
+  const h  = ((data[6]>>4)&0xF)*10+(data[6]&0xF);
+  const m  = ((data[7]>>4)&0xF)*10+(data[7]&0xF);
+  const s  = ((data[8]>>4)&0xF)*10+(data[8]&0xF);
+  const dd = ((data[9]>>4)&0xF)*10+(data[9]&0xF);
+  const mo = ((data[10]>>4)&0xF)*10+(data[10]&0xF);
+  const yy = 2000+((data[11]>>4)&0xF)*10+(data[11]&0xF);
+  const timestamp = new Date(Date.UTC(yy, mo-1, dd, h, m, s));
+  const flags = data[16];
+  const validGps = (flags&0x04)!==0;
+  const latStr = bcdToStr(data.slice(12,16));
+  const latDeg = parseInt(latStr.substring(0,2)), latMin = parseFloat(latStr.substring(2,4)+'.'+latStr.substring(4));
+  let latitude = parseFloat((latDeg+latMin/60).toFixed(6));
+  if ((flags&0x02)!==0) latitude = -latitude;
+  const lonStr = bcdToStr(data.slice(17,21));
+  const lonDeg = parseInt(lonStr.substring(0,3)), lonMin = parseFloat(lonStr.substring(3,5)+'.'+lonStr.substring(5));
+  let longitude = parseFloat((lonDeg+lonMin/60).toFixed(6));
+  if ((flags&0x01)===0) longitude = -longitude;
+  const speedKmH = data[22]<<8|data[23];
+  const statusHex = data.length>=29 ? data.slice(25,29).toString('hex').toUpperCase() : '00000000';
   return { deviceId, timestamp, validGps, latitude, longitude, speedKmH, course: 0, statusHex };
+}
+
+// ==========================================
+// 📍 LOCATION REPORT HANDLER
+// ==========================================
+async function handleLocationReport(vehicle, deviceId, timestamp, validGps, latitude, longitude, speedKmH, course, statusHex) {
+  await prisma.locationReport.create({
+    data: { vehicleId: deviceId, timestamp, validGps, latitude, longitude, speed: speedKmH, course, statusHex }
+  });
+
+  const parsedStatus = parseStatusHex(statusHex);
+
+  io.emit('locationUpdate', {
+    vehicleId: deviceId, vehicleName: vehicle.name||deviceId, vehicleColor: vehicle.color||'#3B82F6',
+    latitude, longitude, speed: speedKmH, course, validGps,
+    status: parsedStatus,
+    timestamp: timestamp.toISOString()
+  });
+
+  // Speed alert
+  if (validGps && vehicle.speedLimit && speedKmH > vehicle.speedLimit) {
+    const payload = { vehicleId: deviceId, vehicleName: vehicle.name||deviceId, speed: speedKmH, speedLimit: vehicle.speedLimit, latitude, longitude, timestamp: timestamp.toISOString() };
+    io.emit('speedAlert', payload);
+    dispatch('speedAlert', payload).catch(() => {});
+    prisma.alert.create({ data: { type: 'speedAlert', vehicleId: deviceId, payload } }).catch(() => {});
+    sendSpeedAlert(payload).catch(() => {});
+    log('warn', `[Speed] ${deviceId} — ${speedKmH}km/h supera límite ${vehicle.speedLimit}km/h`);
+  }
+
+  if (validGps) {
+    checkGeofences(io, dispatch, deviceId, latitude, longitude, timestamp).catch(e => log('error', `[Geofence] ${e.message}`));
+    processTripPoint(deviceId, latitude, longitude, speedKmH, timestamp).catch(e => log('error', `[Trip] ${e.message}`));
+    processIdlePoint(io, dispatch, deviceId, vehicle.name||deviceId, latitude, longitude, speedKmH, timestamp);
+  }
 }
 
 // ==========================================
 // 🔌 TCP SERVER
 // ==========================================
-
-let tcpPort = parseInt(process.env.TCP_PORT || '5013');
-let connectedDevices = new Map();
+const tcpPort = parseInt(process.env.TCP_PORT || '5013');
+const connectedDevices = new Map();
 
 const tcpServer = net.createServer((socket) => {
   const remoteAddr = `${socket.remoteAddress}:${socket.remotePort}`;
   log('info', `Rastreador conectado: ${remoteAddr}`);
 
   socket.on('data', async (data) => {
-
-    // ── Binary $p frame ──────────────────────────────────────
     if (data[0] === 0x24) {
       const parsed = parseBinaryFrame(data);
       if (!parsed || !parsed.validGps) return;
       const { deviceId, timestamp, validGps, latitude, longitude, speedKmH, course, statusHex } = parsed;
-      const vehicleExists = await prisma.vehicle.findUnique({ where: { id: deviceId } });
-      if (!vehicleExists) { log('warn', `[BIN] RECHAZADO ${deviceId} no registrado`); return; }
-      await prisma.locationReport.create({
-        data: { vehicleId: deviceId, timestamp, validGps, latitude, longitude, speed: speedKmH, course, statusHex }
-      });
-      log('success', `[BIN] Guardado ${deviceId} | Lat:${latitude} Lon:${longitude} | ${speedKmH}km/h`);
-      io.emit('locationUpdate', {
-        vehicleId: deviceId,
-        vehicleName: vehicleExists.name || deviceId,
-        vehicleColor: vehicleExists.color || '#3B82F6',
-        latitude, longitude, speed: speedKmH, course, validGps,
-        timestamp: timestamp.toISOString()
-      });
+      const vehicle = await prisma.vehicle.findUnique({ where: { id: deviceId } });
+      if (!vehicle) { log('warn', `[BIN] RECHAZADO ${deviceId}`); return; }
+      await handleLocationReport(vehicle, deviceId, timestamp, validGps, latitude, longitude, speedKmH, course, statusHex);
+      log('success', `[BIN] ${deviceId} | ${latitude},${longitude} | ${speedKmH}km/h`);
       connectedDevices.set(deviceId, { remoteAddr, lastSeen: new Date().toISOString(), comando: 'BIN' });
       io.emit('devicesOnline', Array.from(connectedDevices.entries()).map(([id, info]) => ({ id, ...info })));
       return;
     }
 
-    // ── H02 text frame ───────────────────────────────────────
     const rawString = data.toString('ascii').trim();
     log('info', `[RAW] ${rawString}`);
     io.emit('rawFrame', { raw: rawString, time: new Date().toISOString() });
-
-    const cleanTrama = rawString.split('#')[0];
-    const parts = cleanTrama.split(',');
-
+    const parts = rawString.split('#')[0].split(',');
     if (parts[0] !== '*HQ') return;
 
-    const deviceId = parts[1];
-    const comando  = parts[2];
-
-    connectedDevices.set(deviceId, {
-      remoteAddr,
-      lastSeen: new Date().toISOString(),
-      comando
-    });
+    const deviceId = parts[1], comando = parts[2];
+    connectedDevices.set(deviceId, { remoteAddr, lastSeen: new Date().toISOString(), comando });
     io.emit('devicesOnline', Array.from(connectedDevices.entries()).map(([id, info]) => ({ id, ...info })));
 
-    const vehicleExists = await prisma.vehicle.findUnique({ where: { id: deviceId } });
-    if (!vehicleExists) {
-      log('warn', `RECHAZADO — dispositivo ${deviceId} no registrado`);
-      return;
-    }
+    const vehicle = await prisma.vehicle.findUnique({ where: { id: deviceId } });
+    if (!vehicle) { log('warn', `RECHAZADO — ${deviceId} no registrado`); return; }
 
     try {
-      const timeStr   = parts[3];
-      const gpsStatus = parts[4];
-      const latStr    = parts[5];
-      const latDir    = parts[6];
-      const lonStr    = parts[7];
-      const lonDir    = parts[8];
-      const knotsSpeed = parseFloat(parts[9] || 0);
-      const course    = parseFloat(parts[10] || 0);
-      const dateStr   = parts[11];
+      const validGps = parts[4] === 'A';
+      const latitude  = validGps ? parseDmsToDecimal(parts[5], parts[6]) : 0;
+      const longitude = validGps ? parseDmsToDecimal(parts[7], parts[8]) : 0;
+      const speedKmH  = parseFloat((parseFloat(parts[9]||0) * 1.852).toFixed(2));
+      const course    = parseFloat(parts[10]||0);
+      const timestamp = parseGpsDate(parts[11], parts[3]);
       const statusHex = parts[12] || '00000000';
-
-      const validGps  = gpsStatus === 'A';
-      const latitude  = validGps ? parseDmsToDecimal(latStr, latDir) : 0;
-      const longitude = validGps ? parseDmsToDecimal(lonStr, lonDir) : 0;
-      const speedKmH  = parseFloat((knotsSpeed * 1.852).toFixed(2));
-      const timestamp = parseGpsDate(dateStr, timeStr);
-
-      await prisma.locationReport.create({
-        data: { vehicleId: deviceId, timestamp, validGps, latitude, longitude, speed: speedKmH, course, statusHex }
-      });
-
-      log('success', `Guardado ${deviceId} | Lat:${latitude} Lon:${longitude} | ${speedKmH}km/h`);
-
-      io.emit('locationUpdate', {
-        vehicleId: deviceId,
-        vehicleName: vehicleExists.name || deviceId,
-        vehicleColor: vehicleExists.color || '#3B82F6',
-        latitude, longitude, speed: speedKmH, course, validGps,
-        timestamp: timestamp.toISOString()
-      });
-
-    } catch (error) {
-      log('error', `Parse error para ${deviceId}: ${error.message}`);
-    }
+      await handleLocationReport(vehicle, deviceId, timestamp, validGps, latitude, longitude, speedKmH, course, statusHex);
+      log('success', `${deviceId} | ${latitude},${longitude} | ${speedKmH}km/h`);
+    } catch (err) { log('error', `Parse error ${deviceId}: ${err.message}`); }
   });
 
-  socket.on('error', (err) => log('error', `Socket error: ${err.message}`));
+  socket.on('error', err => log('error', `Socket error: ${err.message}`));
   socket.on('end', () => {
     log('info', `Rastreador desconectó: ${remoteAddr}`);
-    for (const [id, info] of connectedDevices.entries()) {
-      if (info.remoteAddr === remoteAddr) connectedDevices.delete(id);
-    }
+    for (const [id, info] of connectedDevices.entries()) { if (info.remoteAddr === remoteAddr) connectedDevices.delete(id); }
     io.emit('devicesOnline', Array.from(connectedDevices.entries()).map(([id, info]) => ({ id, ...info })));
   });
 });
 
-tcpServer.listen(tcpPort, () => {
-  log('info', `TCP server escuchando en puerto ${tcpPort}`);
-});
+tcpServer.listen(tcpPort, () => log('info', `TCP server en puerto ${tcpPort}`));
 
 // ==========================================
-// 🌐 REST API
+// 🔌 SOCKET.IO AUTH
 // ==========================================
-
-app.post('/api/vehicles', async (req, res) => {
-  const { id, name, plate, color } = req.body;
-  try {
-    const vehicle = await prisma.vehicle.create({ data: { id, name, plate, color } });
-    log('success', `Vehículo creado: ${name || id} (${id})`);
-    io.emit('vehiclesChanged');
-    res.status(201).json({ status: 'success', data: vehicle });
-  } catch (e) {
-    res.status(400).json({ error: 'No se pudo crear el vehículo (¿ya existe ese ID?)' });
-  }
+io.use((socket, next) => {
+  const token = socket.handshake.auth?.token?.replace('Bearer ', '');
+  if (!token) return next(new Error('Authentication required'));
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    if (err) return next(new Error('Invalid token'));
+    socket.user = user;
+    next();
+  });
 });
-
-app.get('/api/vehicles', async (req, res) => {
-  try {
-    const vehicles = await prisma.vehicle.findMany({ orderBy: { createdAt: 'desc' } });
-    res.json(vehicles);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.put('/api/vehicles/:id', async (req, res) => {
-  const { id } = req.params;
-  const { name, plate, color } = req.body;
-  try {
-    const vehicle = await prisma.vehicle.update({ where: { id }, data: { name, plate, color } });
-    log('info', `Vehículo actualizado: ${id}`);
-    io.emit('vehiclesChanged');
-    res.json({ status: 'success', data: vehicle });
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-app.delete('/api/vehicles/:id', async (req, res) => {
-  const { id } = req.params;
-  try {
-    await prisma.vehicle.delete({ where: { id } });
-    log('warn', `Vehículo eliminado: ${id}`);
-    io.emit('vehiclesChanged');
-    res.json({ status: 'success' });
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-app.get('/api/vehicles/latest', async (req, res) => {
-  try {
-    const vehicles = await prisma.vehicle.findMany({
-      include: { reports: { orderBy: { timestamp: 'desc' }, take: 1 } }
-    });
-    res.json(vehicles);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.get('/api/vehicles/:id/history', async (req, res) => {
-  const { id } = req.params;
-  const limit = parseInt(req.query.limit || '100');
-  try {
-    const history = await prisma.locationReport.findMany({
-      where: { vehicleId: id },
-      orderBy: { timestamp: 'desc' },
-      take: limit
-    });
-    res.json(history);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.get('/api/stats', async (req, res) => {
-  try {
-    const [vehicleCount, reportCount, latestReports] = await Promise.all([
-      prisma.vehicle.count(),
-      prisma.locationReport.count(),
-      prisma.locationReport.findMany({ orderBy: { createdAt: 'desc' }, take: 5 })
-    ]);
-    res.json({
-      vehicleCount,
-      reportCount,
-      devicesOnline: connectedDevices.size,
-      latestReports,
-      tcpPort,
-      httpPort: HTTP_PORT
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.get('/api/logs', (req, res) => {
-  res.json(logBuffer);
-});
-
-// ==========================================
-// 🔌 SOCKET.IO
-// ==========================================
 
 io.on('connection', (socket) => {
   socket.emit('devicesOnline', Array.from(connectedDevices.entries()).map(([id, info]) => ({ id, ...info })));
@@ -331,13 +253,56 @@ io.on('connection', (socket) => {
 });
 
 // ==========================================
-// 🚀 START HTTP SERVER
+// 🌐 REST API
 // ==========================================
-
 const HTTP_PORT = parseInt(process.env.HTTP_PORT || '3000');
 
+app.use('/api/auth',          authLimiter, authRouter);
+app.use('/api/vehicles',      vehiclesRouter(io));
+app.use('/api/vehicles/:id/trips', tripsRouter);
+app.use('/api/geofences',     geofencesRouter);
+app.use('/api/admin',         adminRouter);
+app.use('/api/analytics',     analyticsRouter);
+app.use('/api/geocode',       geocodeRouter);
+app.use('/api/webhooks',      webhooksRouter);
+app.use('/api/apikeys',       apikeysRouter);
+app.use('/api/notifications', notificationsRouter);
+app.use('/api',               systemRouter(connectedDevices, logBuffer, tcpPort, HTTP_PORT));
+
+// ==========================================
+// 📚 SWAGGER UI
+// ==========================================
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customSiteTitle: 'SinoTrack API Docs',
+  customCss: '.swagger-ui .topbar{background:#0f172a}.swagger-ui .topbar .download-url-wrapper{display:none}.swagger-ui .info .title{color:#3b82f6;font-size:2em}.swagger-ui .scheme-container{background:#1e293b;padding:15px;border-radius:8px}',
+  swaggerOptions: { persistAuthorization: true, displayRequestDuration: true, docExpansion: 'list', filter: true, tryItOutEnabled: true }
+}));
+app.get('/api-docs.json', (req, res) => res.json(swaggerSpec));
+
+// ==========================================
+// ⚙️ BACKGROUND JOBS
+// ==========================================
+startRetentionJob(log);
+startDeviceTimeoutJob(io, connectedDevices, log, dispatch);
+startWeeklyReportJob(log);
+
+// ==========================================
+// 🚨 GLOBAL ERROR HANDLER
+// ==========================================
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  const status = err.status || err.statusCode || 500;
+  if (status >= 500) log('error', `[HTTP ${status}] ${req.method} ${req.path} — ${err.message}`);
+  res.status(status).json({ error: err.message || 'Error interno del servidor' });
+});
+
+// ==========================================
+// 🚀 START
+// ==========================================
 httpServer.listen(HTTP_PORT, () => {
   log('info', `HTTP/Dashboard en http://localhost:${HTTP_PORT}`);
+  log('info', `Swagger UI en http://localhost:${HTTP_PORT}/api-docs`);
+  log('info', `Health check en http://localhost:${HTTP_PORT}/health`);
 });
 
 process.on('SIGINT', async () => {

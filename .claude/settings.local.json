@@ -12,7 +12,9 @@
       "Bash(docker run *)",
       "PowerShell($pkgJson = [System.IO.Path]::GetFullPath\\(\"C:\\\\Users\\\\Matu\\\\Documents\\\\GitHub\\\\SinoTrack-ST902L server\\\\package.json\"\\); docker run --rm -v \"${pkgJson}:/app/package.json\" -w /app node:22-alpine sh -c \"npm install --no-audit --no-fund --no-package-lock 2>&1 | tail -15\")",
       "PowerShell(ls *)",
-      "PowerShell(docker compose logs *)"
+      "PowerShell(docker compose logs *)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\Matu\\\\Documents\\\\GitHub\\\\SinoTrack-ST902L server\" | Where-Object { $_.Name -ne 'node_modules' })",
+      "PowerShell(docker info *)"
     ]
   }
 }
